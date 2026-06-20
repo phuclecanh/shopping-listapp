@@ -163,6 +163,24 @@
     }
 
     .empty span { font-size: 2rem; display: block; margin-bottom: 8px; }
+
+    .loading {
+      text-align: center;
+      color: #94a3b8;
+      font-size: 0.9rem;
+      padding: 32px 0;
+    }
+
+    .error-banner {
+      margin: 12px 20px 0;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #dc2626;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.8rem;
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -177,6 +195,8 @@
       <button id="add-btn" title="Add item">+</button>
     </div>
 
+    <div id="error-banner" class="error-banner"></div>
+
     <div class="stats">
       <span id="stats-label"></span>
       <button class="clear-btn" id="clear-checked-btn" style="display:none">Clear checked</button>
@@ -185,18 +205,28 @@
     <ul id="list"></ul>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
+    const SUPABASE_URL = 'https://dfjahtlgrispkfbxffqb.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRmamFodGxncmlzcGtmYnhmZnFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE5MTkxNjcsImV4cCI6MjA5NzQ5NTE2N30.UfEAjT6ycri2-kXMqxxztleVAhU-v3qGvBttLyreqew';
+
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
     const input = document.getElementById('item-input');
     const addBtn = document.getElementById('add-btn');
     const list = document.getElementById('list');
     const statsLabel = document.getElementById('stats-label');
     const clearCheckedBtn = document.getElementById('clear-checked-btn');
     const headerSub = document.getElementById('header-sub');
+    const errorBanner = document.getElementById('error-banner');
 
-    let items = JSON.parse(localStorage.getItem('shopping-list') || '[]');
+    let items = [];
 
-    function save() {
-      localStorage.setItem('shopping-list', JSON.stringify(items));
+    function showError(msg) {
+      errorBanner.textContent = msg;
+      errorBanner.style.display = 'block';
+      setTimeout(() => { errorBanner.style.display = 'none'; }, 4000);
     }
 
     function updateStats() {
@@ -219,16 +249,17 @@
         return;
       }
 
-      items.forEach((item, i) => {
+      items.forEach(item => {
         const li = document.createElement('li');
         if (item.checked) li.classList.add('checked');
 
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.checked = item.checked;
-        cb.addEventListener('change', () => {
-          items[i].checked = cb.checked;
-          save();
+        cb.addEventListener('change', async () => {
+          const { error } = await db.from('shopping_items').update({ checked: cb.checked }).eq('id', item.id);
+          if (error) { showError('Failed to update item.'); cb.checked = !cb.checked; return; }
+          item.checked = cb.checked;
           render();
         });
 
@@ -240,9 +271,10 @@
         del.className = 'delete-btn';
         del.textContent = '✕';
         del.title = 'Delete';
-        del.addEventListener('click', () => {
-          items.splice(i, 1);
-          save();
+        del.addEventListener('click', async () => {
+          const { error } = await db.from('shopping_items').delete().eq('id', item.id);
+          if (error) { showError('Failed to delete item.'); return; }
+          items = items.filter(i => i.id !== item.id);
           render();
         });
 
@@ -253,25 +285,38 @@
       updateStats();
     }
 
-    function addItem() {
+    async function addItem() {
       const name = input.value.trim();
       if (!name) return;
-      items.push({ name, checked: false });
+      addBtn.disabled = true;
+      const { data, error } = await db.from('shopping_items').insert({ name, checked: false }).select().single();
+      addBtn.disabled = false;
+      if (error) { showError('Failed to add item.'); return; }
+      items.push(data);
       input.value = '';
-      save();
+      render();
+    }
+
+    async function loadItems() {
+      list.innerHTML = '<li class="loading">Loading...</li>';
+      const { data, error } = await db.from('shopping_items').select('*').order('created_at', { ascending: true });
+      if (error) { showError('Failed to load items from database.'); list.innerHTML = ''; return; }
+      items = data;
       render();
     }
 
     addBtn.addEventListener('click', addItem);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') addItem(); });
 
-    clearCheckedBtn.addEventListener('click', () => {
+    clearCheckedBtn.addEventListener('click', async () => {
+      const checkedIds = items.filter(i => i.checked).map(i => i.id);
+      const { error } = await db.from('shopping_items').delete().in('id', checkedIds);
+      if (error) { showError('Failed to clear checked items.'); return; }
       items = items.filter(i => !i.checked);
-      save();
       render();
     });
 
-    render();
+    loadItems();
   </script>
 </body>
 </html>
